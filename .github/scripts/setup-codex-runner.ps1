@@ -39,7 +39,7 @@ function Ensure-GitHubCli {
 }
 
 function Ensure-Node {
-  if ((Get-Command node -ErrorAction SilentlyContinue) -and (Get-Command npm -ErrorAction SilentlyContinue)) {
+  if ((Get-Command node -ErrorAction SilentlyContinue) -and (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
     return
   }
 
@@ -51,32 +51,32 @@ function Ensure-Node {
   }
   Refresh-Path
 
-  if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    throw "Node.js was installed but npm is not available in PATH yet. Open a new PowerShell window and run this script again."
+  if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw "Node.js was installed but npm.cmd is not available in PATH yet. Open a new PowerShell window and run this script again."
   }
 }
 
 function Ensure-Codex {
-  if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
+  if (-not (Get-Command codex.cmd -ErrorAction SilentlyContinue)) {
     Ensure-Node
     Write-Host "Installing Codex CLI..."
-    npm install -g @openai/codex
+    & npm.cmd install -g @openai/codex
     if ($LASTEXITCODE -ne 0) {
       throw "Codex CLI installation failed."
     }
     Refresh-Path
   }
 
-  codex --version
-  $status = (codex login status 2>&1 | Out-String).Trim()
+  & codex.cmd --version
+  $status = (& codex.cmd login status 2>&1 | Out-String).Trim()
 
   if ($LASTEXITCODE -ne 0 -or $status -notmatch "Logged in using ChatGPT") {
     Write-Host "Codex needs ChatGPT sign-in. A browser sign-in will open now."
-    codex login
+    & codex.cmd login
     if ($LASTEXITCODE -ne 0) {
       throw "Codex ChatGPT sign-in did not complete."
     }
-    $status = (codex login status 2>&1 | Out-String).Trim()
+    $status = (& codex.cmd login status 2>&1 | Out-String).Trim()
   }
 
   if ($status -notmatch "Logged in using ChatGPT") {
