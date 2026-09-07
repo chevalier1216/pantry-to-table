@@ -1,0 +1,112 @@
+name: Bootstrap BGi-desktop self-hosted runner
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  bootstrap:
+    if: github.event.issue.user.login == github.repository_owner && github.event.issue.title == '[BOOTSTRAP] BGi-desktop runner'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+
+    steps:
+      - name: Verify shared workstation tools
+        shell: pwsh
+        run: |
+          pwsh --version
+          gh --version
+          node --version
+          codex.cmd --version
+          $login = cmd.exe /d /s /c "codex.cmd login status 2>&1"
+          $login
+          if (($login -join "`n") -notmatch 'Logged in using ChatGPT') {
+            throw 'Codex CLI is not logged in using ChatGPT.'
+          }
+          gh auth status
+
+      - name: Configure BGi-desktop repo runner
+        id: setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Repo = 'chevalier1216/BGi-desktop'
+          $RepoUrl = "https://github.com/$Repo"
+          $RunnerDir = 'C:\actions-runners\BGi-desktop'
+          $RunnerName = "$env:COMPUTERNAME-BGi-desktop-codex"
+
+          New-Item -ItemType Directory -Force -Path $RunnerDir | Out-Null
+
+          if (-not (Test-Path (Join-Path $RunnerDir 'config.cmd'))) {
+            $headers = @{ 'User-Agent' = 'bgi-codex-runner-bootstrap' }
+            $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/actions/runner/releases/latest'
+            $asset = $release.assets | Where-Object { $_.name -like 'actions-runner-win-x64-*.zip' } | Select-Object -First 1
+            if (-not $asset) { throw 'Cannot find Windows x64 GitHub Actions runner asset.' }
+            $zip = Join-Path $env:RUNNER_TEMP $asset.name
+            Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $zip
+            Expand-Archive -Path $zip -DestinationPath $RunnerDir -Force
+            Remove-Item $zip -Force
+          }
+
+          $runnerFile = Join-Path $RunnerDir '.runner'
+          if (-not (Test-Path $runnerFile)) {
+            $token = (gh api --method POST "repos/$Repo/actions/runners/registration-token" | ConvertFrom-Json).token
+            if (-not $token) { throw 'Failed to acquire BGi-desktop runner registration token.' }
+            Push-Location $RunnerDir
+            try {
+              & .\config.cmd --unattended --url $RepoUrl --token $token --name $RunnerName --work '_work' --replace
+              if ($LASTEXITCODE -ne 0) { throw "config.cmd failed with exit code $LASTEXITCODE" }
+            } finally {
+              Pop-Location
+            }
+          }
+
+          $StartupDir = [Environment]::GetFolderPath('Startup')
+          $StartupFile = Join-Path $StartupDir 'BGi-desktop-codex-runner.cmd'
+          @"
+          @echo off
+          cd /d "$RunnerDir"
+          call run.cmd
+          "@ | Set-Content -Path $StartupFile -Encoding ascii
+
+          $existing = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq 'Runner.Listener.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($RunnerDir, [System.StringComparison]::OrdinalIgnoreCase)
+          }
+          if (-not $existing) {
+            Remove-Item Env:RUNNER_TRACKING_ID -ErrorAction SilentlyContinue
+            Start-Process -FilePath (Join-Path $RunnerDir 'run.cmd') -WorkingDirectory $RunnerDir -WindowStyle Minimized
+          }
+
+          $online = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            $runners = gh api "repos/$Repo/actions/runners" | ConvertFrom-Json
+            $match = $runners.runners | Where-Object { $_.name -eq $RunnerName }
+            if ($match -and $match.status -eq 'online') {
+              $online = $true
+              break
+            }
+          }
+          if (-not $online) { throw "BGi-desktop runner '$RunnerName' did not become online." }
+
+          "runner_name=$RunnerName" >> $env:GITHUB_OUTPUT
+          "runner_dir=$RunnerDir" >> $env:GITHUB_OUTPUT
+          "startup_file=$StartupFile" >> $env:GITHUB_OUTPUT
+
+      - name: Report bootstrap success
+        uses: actions/github-script@v7
+        env:
+          RUNNER_NAME: ${{ steps.setup.outputs.runner_name }}
+          RUNNER_DIR: ${{ steps.setup.outputs.runner_dir }}
+          STARTUP_FILE: ${{ steps.setup.outputs.startup_file }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `BGi-desktop runner bootstrap succeeded.\n\nRunner: \`${process.env.RUNNER_NAME}\`\nDirectory: \`${process.env.RUNNER_DIR}\`\nStartup: \`${process.env.STARTUP_FILE}\`\nStatus: online`,
+            });
