@@ -56,6 +56,14 @@ function Ensure-Node {
   }
 }
 
+function Get-CodexLoginStatus {
+  $status = (& cmd.exe /d /s /c "codex.cmd login status 2>&1" | Out-String).Trim()
+  return [PSCustomObject]@{
+    Text = $status
+    ExitCode = $LASTEXITCODE
+  }
+}
+
 function Ensure-Codex {
   if (-not (Get-Command codex.cmd -ErrorAction SilentlyContinue)) {
     Ensure-Node
@@ -68,28 +76,28 @@ function Ensure-Codex {
   }
 
   & codex.cmd --version
-  $status = (& codex.cmd login status 2>&1 | Out-String).Trim()
+  $loginStatus = Get-CodexLoginStatus
 
-  if ($LASTEXITCODE -ne 0 -or $status -notmatch "Logged in using ChatGPT") {
+  if ($loginStatus.ExitCode -ne 0 -or $loginStatus.Text -notmatch "Logged in using ChatGPT") {
     Write-Host "Codex needs ChatGPT sign-in. A browser sign-in will open now."
     & codex.cmd login
     if ($LASTEXITCODE -ne 0) {
       throw "Codex ChatGPT sign-in did not complete."
     }
-    $status = (& codex.cmd login status 2>&1 | Out-String).Trim()
+    $loginStatus = Get-CodexLoginStatus
   }
 
-  if ($status -notmatch "Logged in using ChatGPT") {
-    throw "Codex is not signed in using ChatGPT. Current status: $status"
+  if ($loginStatus.Text -notmatch "Logged in using ChatGPT") {
+    throw "Codex is not signed in using ChatGPT. Current status: $($loginStatus.Text)"
   }
 
-  Write-Host $status
+  Write-Host $loginStatus.Text
 }
 
 function Ensure-GitHubAuth {
   Ensure-GitHubCli
 
-  gh auth status --hostname github.com *> $null
+  & cmd.exe /d /s /c "gh auth status --hostname github.com >nul 2>&1"
   if ($LASTEXITCODE -eq 0) {
     return
   }
