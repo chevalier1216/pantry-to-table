@@ -58,13 +58,13 @@ jobs:
       - name: Install dependencies
         if: ${{ hashFiles('package-lock.json') != '' }}
         shell: pwsh
-        run: npm ci
+        run: npm.cmd ci
 
       - name: Verify Codex login
         shell: pwsh
         run: |
-          codex --version
-          codex login status
+          codex.cmd --version
+          codex.cmd login status
 
       - name: Run Codex
         shell: pwsh
@@ -93,7 +93,7 @@ jobs:
           "@ | Set-Content -Path $promptPath -Encoding utf8
 
           Get-Content -Path $promptPath -Raw |
-            codex --ask-for-approval never exec --sandbox workspace-write --cd "$env:GITHUB_WORKSPACE" -
+            codex.cmd --ask-for-approval never exec --sandbox workspace-write --cd "$env:GITHUB_WORKSPACE" -
 
       - name: Detect changes
         id: changes
@@ -111,9 +111,9 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path package.json) {
-            npm run test:core
-            npm run typecheck
-            npm test
+            npm.cmd run test:core
+            npm.cmd run typecheck
+            npm.cmd test
           }
 
       - name: Commit and push
