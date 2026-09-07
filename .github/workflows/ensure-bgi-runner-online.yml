@@ -1,0 +1,58 @@
+name: Ensure BGi-desktop runner online
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  ensure:
+    if: github.event.issue.user.login == github.repository_owner && github.event.issue.title == '[BOOTSTRAP] Ensure BGi runner online'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+
+    steps:
+      - name: Ensure BGi runner process
+        id: ensure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $RunnerDir = 'C:\actions-runners\BGi-desktop'
+          $RunPath = Join-Path $RunnerDir 'run.cmd'
+          if (-not (Test-Path $RunPath)) { throw "Missing BGi runner run.cmd at $RunPath" }
+
+          $existing = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq 'Runner.Listener.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($RunnerDir, [System.StringComparison]::OrdinalIgnoreCase)
+          }
+
+          if (-not $existing) {
+            Remove-Item Env:RUNNER_TRACKING_ID -ErrorAction SilentlyContinue
+            Start-Process -FilePath $RunPath -WorkingDirectory $RunnerDir -WindowStyle Minimized
+            Start-Sleep -Seconds 5
+          }
+
+          $existing = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq 'Runner.Listener.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($RunnerDir, [System.StringComparison]::OrdinalIgnoreCase)
+          }
+          if (-not $existing) { throw 'BGi Runner.Listener did not stay running.' }
+
+          $runners = gh api 'repos/chevalier1216/BGi-desktop/actions/runners' | ConvertFrom-Json
+          $match = $runners.runners | Where-Object { $_.name -like '*BGi-desktop*' }
+          if (-not $match) { throw 'No BGi-desktop repository runner registration found.' }
+          $match | ConvertTo-Json -Depth 5 | Write-Host
+          if (-not ($match | Where-Object { $_.status -eq 'online' })) { throw 'BGi-desktop runner is registered but not online.' }
+
+          "status=online" >> $env:GITHUB_OUTPUT
+
+      - name: Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'BGi-desktop runner check: online.'
+            });
