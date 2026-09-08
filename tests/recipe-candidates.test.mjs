@@ -12,7 +12,18 @@ test('search metadata parsed without guessed quantities, servings, equipment or 
 test('detail parses graph and retains source quantities and free-form names',()=>{const r=parseDetail(detail,'123');assert.equal(r.servings,2);assert.equal(r.ingredients[0].amount,2);assert.equal(r.ingredients[2].name,'甜椒');assert.equal(r.ingredients[2].amount,null);assert.equal(r.ingredients[2].amountText,'適量');assert.deepEqual(r.steps,['原創測試步驟']);assert.equal(r.equipment,null);});
 test('unknown layout fails explicitly and first batch is bounded',()=>{assert.throws(()=>parseSearch('<html>changed</html>'));assert.throws(()=>parseDetail('<html>changed</html>','123'));assert.equal(parseSearch(card.repeat(50)).length,20);});
 test('normal recommendation uses at most three searches and never detail or LLM',async()=>{const calls=[];const service=createRecipeService({search:async q=>{calls.push(q);return [recipe('1','番茄烘蛋')]},detail:()=>{throw Error('must not fetch detail')}});const r=await service.recommend(input);assert.equal(calls.length,3);assert.equal(r.requests,3);assert.equal(r.pairings.length,0);});
-test('pairing activates only on checkbox and has a shared five request cap',async()=>{const calls=[];const rice={...recipe('2','家常白飯'),ingredients:[ingredient('熟白飯',200,'克')]};const service=createRecipeService({search:async q=>{calls.push(q);return [{...rice,title:q}]},detail:()=>{throw Error('no detail')}});const r=await service.recommend({...input,pairMeals:true});assert.ok(calls.length<=5);assert.ok(r.pairings.length<=2);assert.ok(r.pairings.length);assert.ok(r.pairings.every(p=>p.evidenceUrl==='https://icook.tw/recipes/2'));});
+test('pairing activates only on checkbox and has a shared five request cap',async()=>{
+ const calls=[];
+ const service=createRecipeService({search:async q=>{
+  calls.push(q);
+  const main=defaultRecipes().find(r=>q.startsWith(r.title+' '));
+  if(!main)return [];
+  return [{...recipe('2',q),ingredients:[...main.ingredients,ingredient(/麵/.test(q)?'乾麵條':'熟白飯',200,'克')]}];
+ },detail:()=>{throw Error('no detail')}});
+ const r=await service.recommend({...input,pairMeals:true});
+ assert.ok(calls.length<=5);assert.ok(r.pairings.length<=2);assert.ok(r.pairings.length);
+ assert.ok(r.pairings.every(p=>p.evidenceUrl==='https://icook.tw/recipes/2'));
+});
 test('dedupe and diversity prevent tomato egg variants dominating first batch',()=>{const variants=Array.from({length:12},(_,i)=>recipe(String(i),'家常番茄炒蛋 '+i));const rows=rank([...variants,variants[0],recipe('20','番茄烘蛋'),recipe('21','番茄蛋花湯')],input);assert.equal(rows.length,4);assert.equal(new Set(rows.map(r=>r.id)).size,4);assert.equal(rows.slice(0,3).filter(r=>r.title.includes('炒蛋')).length,1);});
 test('strict rejects known missing oil salt water and shop lists them',()=>{const r=defaultRecipes()[0],x={...input,inventory:{egg:3,tomato:300},mode:'strict'};assert.equal(assess(r,x).rejected,true);const a=assess(r,{...x,mode:'shop'});assert.equal(a.rejected,false);assert.deepEqual(a.missing,['食用油','鹽']);});
 test('quantities aggregate duplicate ingredients before strict validation',()=>{const r=defaultRecipes()[0];const both=combine(r,r);assert.equal(assess(both,{...input,mode:'strict',inventory:{...input.inventory,oil:20}}).rejected,true);});

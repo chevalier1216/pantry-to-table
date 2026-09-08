@@ -41,3 +41,13 @@
 - 原未提交 D1 索引工作保留在原 worktree；不屬於此分支。無 merge、無 deploy。
 - 指定 Google Drive 資料夾尚待使用者回覆；Google Doc 版本紀錄尚未建立。詳細範圍與限制見 `docs/icook-on-demand.md`。
 
+## Issue #13：PR #10 四項 review 修正 — 2026-09-08（工作目錄，未提交）
+
+- 分支 `codex/issue-13`。搭配搜尋納入料理標題及主食方向，來源須包含料理主要食材與實際主食；保留勾選才執行、最多兩次搭配／共五次搜尋及按需 detail。
+- 方向改用食材與烹調特徵；多樣性按正規化作法與主要食材分組，限制番茄炒蛋／滑蛋近似款，同時保留不同食材的炒菜。
+- 詳細頁抽出共用元件，來源改為不可點擊文字，收藏快照沿用；新增 React 實際渲染回歸測試，曾確認舊來源 anchor 會使測試失敗。
+- TDD：修正前重現方向、脈絡搜尋、來源外連與兩側分組缺陷；修正後聚焦測試 27/27。`npm run test:core` 21/21、`npm run typecheck` PASS、`npm test` 54/54（含 production Worker build／HTTP）及 `git diff --check` PASS。
+- Windows 使用 `npm.cmd` 避免 PowerShell 的 npm.ps1 執行限制，沿用已安裝 Git Bash PATH；未修改產品建置腳本。未新增依賴、付費 API 或 LLM 必要性。
+- 未執行瀏覽器點擊／視覺或 live iCook 搜尋驗證；來源摘要與保守方向規則仍不等於完整可做保證。
+- 全部修改尚未提交；依本 issue 指示由工作流程處理 commit／push／draft PR。未開 PR、merge 或 deploy；本次沒有需要額外產品決策的阻塞。
+
