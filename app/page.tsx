@@ -7,6 +7,7 @@ import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
 import {Dialog,DialogContent,DialogTitle,DialogDescription,DialogHeader} from '@/components/ui/dialog';
 import {INGREDIENTS,EQUIPMENT,EXCLUSIONS} from '@/lib/catalog.mjs';
 import {parseInput,planMeals} from '@/lib/planner.mjs';
+import {RecipeCandidates,type Conditions} from '@/components/recipe-candidates';
 import {createRequestGate} from '@/lib/request-gate.mjs';
 
 type Step={title:string;detail:string;minutes:number;recipe:string;start:number;end:number};
@@ -19,6 +20,7 @@ type Store={id:string;name:string;address:string;walkMinutes:number;distanceMete
 const examples=[{title:'冰箱裡的兩人晚餐',text:'雞蛋6顆、番茄兩顆、半顆高麗菜、兩碗熟白飯，油和鹽都足夠，有飲用水。兩個人，40分鐘，不吃辣，有平底鍋和爐火，只用現有食材。'},{title:'電鍋也能開飯',text:'雞蛋3顆，飲用水和鹽都足夠。一個人，35分鐘，有電鍋，只用現有食材。'},{title:'可以出門補一點',text:'一盒板豆腐、一包鮮菇、半瓶醬油。兩個人，40分鐘，不吃蛋，有平底鍋和爐火，可以補買。'}];
 function Choice({id,checked,onChange,children}:{id:string;checked:boolean;onChange:(v:boolean)=>void;children:React.ReactNode}){return <label className={'choice '+(checked?'chosen':'')} htmlFor={id}><Checkbox id={id} checked={checked} onCheckedChange={v=>onChange(v===true)}/><span>{children}</span></label>}
 export default function Home(){
+ const [candidateInput,setCandidateInput]=useState<Conditions|null>(null);const [pairMeals,setPairMeals]=useState(false);
  const parseGate=useRef(createRequestGate());const storeGate=useRef(createRequestGate());
  const [text,setText]=useState('');const [inventory,setInventory]=useState<Record<string,Stock>>({});
  const [people,setPeople]=useState(2);const [minutes,setMinutes]=useState(40);const [mode,setMode]=useState('strict');const [equipment,setEquipment]=useState<string[]>([]);const [exclusions,setExclusions]=useState<string[]>([]);
@@ -27,17 +29,19 @@ export default function Home(){
  const [location,setLocation]=useState('');const [walkMinutes,setWalkMinutes]=useState(10);const [storeBusy,setStoreBusy]=useState(false);const [stores,setStores]=useState<Store[]>([]);const [storeMessage,setStoreMessage]=useState('');const [resolvedLocation,setResolvedLocation]=useState('');const [stepOpen,setStepOpen]=useState(false);const [step,setStep]=useState(0);const [completed,setCompleted]=useState(false);
  useEffect(()=>{fetch('/api/status').then(r=>r.ok?r.json():null).then(v=>{if(v)setCapabilities(v)}).catch(()=>{});},[]);
  function invalidateStores(){storeGate.current.invalidate();setStoreBusy(false);setStores([]);setStoreMessage('');setResolvedLocation('');}
- function invalidate(){parseGate.current.invalidate();setBusy(false);invalidateStores();setPlans([]);setMessage('');setStores([]);setStoreMessage('');setStepOpen(false);}
+ function invalidate(){setCandidateInput(null);parseGate.current.invalidate();setBusy(false);invalidateStores();setPlans([]);setMessage('');setStores([]);setStoreMessage('');setStepOpen(false);}
  function toggle(value:string,values:string[],set:(v:string[])=>void,on:boolean){invalidate();set(on?[...values,value]:values.filter(i=>i!==value));}
  function applyDraft(d:Draft){setInventory(d.inventory);setEquipment(d.equipment);setExclusions(d.exclusions);setUnresolved(d.unresolved);setOtherRestriction(d.unresolved.filter(s=>s.includes('忌口')).join('；'));if(d.people!==null)setPeople(d.people);if(d.minutes!==null)setMinutes(d.minutes);if(d.mode)setMode(d.mode);setParsed(true);setNoExclusions(d.exclusions.length===0&&!d.unresolved.some(s=>s.includes('忌口')));setMessage('已整理食材。接著選擇廚具與忌口，就能找餐點。');}
  async function parse(value=text){if(!value.trim()){setMessage('先告訴我手邊有哪些食材，或選一個範例。');return;}invalidate();const ticket=parseGate.current.begin();setBusy(true);try{if(useAI){const r=await fetch('/api/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:value})});const d=await r.json();if(!parseGate.current.isCurrent(ticket))return;if(!r.ok||d.status!=='ok'){setMessage(d.message||'辨識未成功。');return;}applyDraft(d.draft);}else applyDraft(parseInput(value) as Draft);}catch{if(parseGate.current.isCurrent(ticket))setMessage('辨識暫時失敗，輸入仍保留，請重試。');}finally{if(parseGate.current.isCurrent(ticket))setBusy(false);}}
- function generate(){invalidateStores();if(otherRestriction.trim()){setMessage('仍有未確認的忌口。請將限制對應到下方項目；若無法對應，目前不能提供可靠推薦。');return;}if(!equipment.length){setMessage('請選擇可用廚具與熱源，或選「不拘」。');return;}const r=planMeals({inventory,people,minutes,equipment,exclusions,mode,shoppingMinutes:mode==='shop'&&includeShopping?shoppingMinutes:0});setPlans(r.plans as Meal[]);setSelected(0);setMessage(r.issues.join(' '));setStep(0);setCompleted(false);}
+ function generate(){invalidateStores();if(otherRestriction.trim()){setMessage('仍有未確認的忌口。請將限制對應到下方項目；若無法對應，目前不能提供可靠推薦。');return;}if(!equipment.length){setMessage('請選擇可用廚具與熱源，或選「不拘」。');return;}setPlans([]);setCandidateInput({inventory,people,minutes,equipment,exclusions,mode,pairMeals,shoppingMinutes:mode==='shop'&&includeShopping?shoppingMinutes:0});setMessage('');setStep(0);setCompleted(false);}
+ function selectDefault(id:string|null){invalidateStores();setPlans(id&&candidateInput?planMeals(candidateInput).plans.filter(p=>p.id===id) as Meal[]:[]);setSelected(0);setStep(0);setCompleted(false);}
+
  async function lookup(){const ticket=storeGate.current.begin();setStoreBusy(true);setStores([]);setStoreMessage('');setResolvedLocation('');try{const r=await fetch('/api/stores',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location,walkMinutes})});const d=await r.json();if(!storeGate.current.isCurrent(ticket))return;setStoreMessage(d.message||'');if(r.ok){setStores(d.stores||[]);setResolvedLocation(d.location||'');if(d.status==='ok'&&!d.stores?.length)setStoreMessage((d.message||'')+' 此範圍沒有可顯示的店家，可更換地標或增加步行時間。');}}catch{if(storeGate.current.isCurrent(ticket))setStoreMessage('目前無法查詢店家，請稍後再試或開啟地圖。');}finally{if(storeGate.current.isCurrent(ticket))setStoreBusy(false);}}
  const meal=plans[selected];const currentStep=meal?.timeline[step];
  return <div className="site-shell">
   <header className="topbar"><a className="brand" href="/" aria-label="今晚煮什麼首頁"><span className="brand-icon"><UtensilsCrossed size={22}/></span><span>今晚煮什麼<small>PANTRY TO TABLE</small></span></a><div className="top-links"><span className="beta">家庭料理實驗室 · BETA</span><a href="https://github.com/chevalier1216/pantry-to-table" target="_blank" rel="noreferrer">開源專案 <ExternalLink size={15}/></a></div></header>
   <main>
-   <div className="page-heading"><div><p className="eyebrow">從冰箱，到餐桌</p><h1>今天，就用手邊的食材。</h1></div><p>告訴我有什麼，<br/>一起安排這一餐怎麼煮。</p></div>
+   <div className="page-heading"><div><p className="eyebrow">從冰箱，到餐桌</p><h1>今天，就用手邊的食材。</h1></div><p>告訴我有什麼，<br/>看看有哪些料理可以做。</p></div>
    <div className="workspace">
     <section className="input-panel" aria-labelledby="input-heading">
      <div className="section-label"><span className="number">01</span><h2 id="input-heading">你的廚房，有些什麼？</h2></div>
@@ -55,7 +59,7 @@ export default function Home(){
     </section>
     <aside className="inspiration">
      <div className="food-photo"><img src="/family-dinner.png" alt="番茄炒蛋、高麗菜與白飯的家庭餐桌示意"/><span className="photo-tag"><Leaf size={14}/>家常菜，剛剛好</span><span className="image-caption">料理情境示意圖</span></div>
-     <div className="inspiration-content"><p className="eyebrow">少一點猶豫，多一點開飯</p><h2>一餐的順序，<br/>也一起想好了。</h2><p>先備料、再開火，把每道菜排進同一份時間表。份量、缺料與每一步，煮之前都看得見。</p><div className="mini-features"><span><Check size={16}/>依人數換算</span><span><Check size={16}/>核對廚具</span><span><Check size={16}/>逐步教學</span></div></div>
+     <div className="inspiration-content"><p className="eyebrow">少一點猶豫，多一點開飯</p><h2>手邊的食材，<br/>還能煮什麼？</h2><p>先備料、再開火，把每道菜排進同一份時間表。份量、缺料與每一步，煮之前都看得見。</p><div className="mini-features"><span><Check size={16}/>依人數換算</span><span><Check size={16}/>核對廚具</span><span><Check size={16}/>逐步教學</span></div></div>
     </aside>
    </div>
    <div className="status-message" role="status" aria-live="polite">{message}</div>
@@ -67,15 +71,16 @@ export default function Home(){
      <h3>這餐必須避開</h3><p className="small-note">包含複合調味料。過敏者仍需核對產品標示及交叉接觸。</p><div className="choices"><Choice id="exclude-none" checked={noExclusions} onChange={v=>{invalidate();setNoExclusions(v);if(v){setExclusions([]);setOtherRestriction('');setUnresolved(unresolved.filter(s=>!s.includes('忌口')))}}}>無</Choice>{EXCLUSIONS.map(e=><Choice key={e.id} id={'exclude-'+e.id} checked={exclusions.includes(e.id)} onChange={v=>{setNoExclusions(false);toggle(e.id,exclusions,setExclusions,v)}}>{e.name}</Choice>)}</div>
      {otherRestriction&&<label className="other-restriction">未確認的忌口（未解決前不能推薦）<input aria-label="未確認忌口" value={otherRestriction} onChange={e=>{invalidate();setOtherRestriction(e.target.value)}}/><span>請先選取上方對應限制，確認無遺漏後才清除此欄。</span></label>}
     </div></div>
-    <div className="confirm-footer"><Button className="generate" onClick={generate}>找出合適的餐點 <ArrowRight size={18}/></Button></div>
+    <Choice id="pair-meals" checked={pairMeals} onChange={v=>{invalidate();setPairMeals(v)}}>搭配成套餐</Choice><div className="confirm-footer"><Button className="generate" onClick={generate}>找出料理候選 <ArrowRight size={18}/></Button></div>
    </section>}
+   <RecipeCandidates input={candidateInput} onDefault={selectDefault}/>
    {meal&&<section className="results" aria-labelledby="results-heading">
-    <div className="section-label"><span className="number">03</span><h2 id="results-heading">這一餐，可以這樣煮</h2><span className="section-aside">{plans.length} 組符合條件 · 時間為估算</span></div>
+    <div className="section-label"><span className="number">03</span><h2 id="results-heading">料理詳細與逐步教學</h2><span className="section-aside">{plans.length} 道符合條件 · 時間為估算</span></div>
     <div className="plan-options">{plans.map((p,i)=><button className={'plan-option '+(selected===i?'selected':'')} aria-pressed={selected===i} key={p.id} onClick={()=>{invalidateStores();setSelected(i);setStep(0);setCompleted(false);setStores([]);setStoreMessage('')}}><span className="option-label">{i===0?'優先推薦':'換個口味'}</span><strong>{p.title}</strong><span><Clock size={15}/>{p.totalMinutes} 分鐘 <span className="option-divider">·</span>{p.missing.length?`需補 ${p.missing.length} 種材料`:p.quantityChecks.length?'食材已有，份量請對照':'材料都齊了'}</span></button>)}</div>
     <div className="meal-detail"><div className="meal-main"><div className="meal-title"><div><p className="eyebrow">你的料理安排</p><h2>{meal.title}</h2><p>{meal.people} 人份 · {meal.recipes.length} 道 · 料理約 {meal.cookingMinutes} 分鐘{meal.shoppingMinutes>0?` ＋ 採買預留 ${meal.shoppingMinutes} 分鐘`:''}</p></div><Button onClick={()=>{setStepOpen(true);setStep(0);setCompleted(false)}}><BookOpen size={17}/>逐步教學</Button></div>
-     {!meal.hasStaple&&<p className="notice compact">這組是菜餚搭配，沒有主食；飯或麵若未列入，時間與份量也未包含。</p>}
+     {!meal.hasStaple&&<p className="notice compact">這道料理沒有主食；飯或麵若未列入，時間與份量也未包含。</p>}
      {mode==='shop'&&meal.missing.length>0&&!includeShopping&&<p className="small-note">目前時間不含採買；買齊材料後才能照此清單開始。</p>}
-     <p className="small-note">所需廚具與熱源：{[...new Set(meal.recipes.flatMap(r=>r.equipment))].map(id=>EQUIPMENT.find(e=>e.id===id)?.name).join('、')}</p><h3>整餐時間表</h3><p className="small-note">採依序烹調，已預留備料與整理；份量較大時會延長時間。</p>
+     <p className="small-note">所需廚具與熱源：{[...new Set(meal.recipes.flatMap(r=>r.equipment))].map(id=>EQUIPMENT.find(e=>e.id===id)?.name).join('、')}</p><h3>料理時間表</h3><p className="small-note">採依序烹調，已預留備料與整理；份量較大時會延長時間。</p>
      <ol className="timeline">{meal.shoppingMinutes>0&&<li><span className="timeline-time">0–{meal.shoppingMinutes}<small>分鐘</small></span><div><span className="timeline-dish">預留時間</span><h4>採買、往返與結帳</h4><p>由你設定的時間預留，不代表已確認店家有貨或來回路線。</p></div></li>}{meal.timeline.map((s,i)=><li key={i}><span className="timeline-time">{s.start}–{s.end}<small>分鐘</small></span><div><span className="timeline-dish">{s.recipe}</span><h4>{s.title}</h4><p>{s.detail}</p></div></li>)}</ol>
      {meal.recipes.map(r=><div className="recipe-reference" key={r.id}>{r.note&&<p className="small-note">{r.note}</p>}<a target="_blank" rel="noreferrer" href={'https://www.youtube.com/results?search_query='+encodeURIComponent(r.name+' 家常做法 教學')}>搜尋「{r.name}」影片教學 <ExternalLink size={14}/></a><small>外部搜尋結果，尚未核對；請以本頁的用量與限制為準。</small></div>)}
     </div><aside className="ingredients-summary"><h3><ShoppingBasket size={20}/>這一餐要用的材料</h3><p className="small-note">已合併每道菜的用量 · {meal.people} 人份</p><ul>{meal.ingredients.map(i=><li key={i.id}><span>{i.name}<small>現有：{i.stockDescription||`${i.available} ${i.unit}`}{i.needsQuantityCheck&&' · 請對照用量'}</small></span><strong>{i.amount} {i.unit}</strong></li>)}</ul><div className={'stock-status '+(meal.missing.length?'shortage':'')}><strong>{meal.missing.length?'需要補買':meal.quantityChecks.length?'食材已有，份量請對照':'現有材料足夠'}</strong>{meal.missing.length?<ul>{meal.missing.map(i=><li key={i.id}><span>{i.name}</span><b>缺 {i.shortage} {i.unit}</b></li>)}</ul>:<p>{meal.quantityChecks.length?'已列出整餐精確用量，請與手邊的材料比較；半顆、半瓶等描述不會自動換算重量。':'依你提供的數量或足夠描述規劃。'}</p>}</div>
