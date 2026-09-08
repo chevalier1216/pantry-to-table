@@ -1,0 +1,30 @@
+name: Codex workflow regression tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/codex-self-hosted.yml'
+      - '.github/workflows/codex-workflow-tests.yml'
+      - '.github/tests/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/codex-self-hosted.yml'
+      - '.github/workflows/codex-workflow-tests.yml'
+      - '.github/tests/**'
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Test inline workflow scripts without running Codex
+        shell: pwsh
+        run: node --test .github/tests/codex-self-hosted.test.cjs

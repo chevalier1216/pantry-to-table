@@ -9,6 +9,10 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: codex-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   codex:
     if: github.event.issue.user.login == github.repository_owner && startsWith(github.event.issue.title, '[CODEX]')
@@ -16,6 +20,38 @@ jobs:
     timeout-minutes: 90
 
     steps:
+      # Inline helpers intentionally work even when Codex-Base predates this workflow.
+      - name: Prepare Git for Windows PATH
+        shell: pwsh
+        run: |
+          $roots = @(
+            "$env:ProgramFiles\Git",
+            "${env:ProgramFiles(x86)}\Git",
+            "$env:LOCALAPPDATA\Programs\Git",
+            "$env:USERPROFILE\scoop\apps\git\current"
+          )
+          foreach ($command in @('git.exe', 'bash.exe')) {
+            foreach ($found in @(Get-Command $command -All -ErrorAction SilentlyContinue)) {
+              $dir = Split-Path $found.Source
+              $roots += Split-Path $dir
+              $roots += Split-Path (Split-Path $dir)
+            }
+          }
+          $gitRoot = $roots | Select-Object -Unique | Where-Object {
+            (Test-Path -LiteralPath "$_\bin\bash.exe") -and
+            (Test-Path -LiteralPath "$_\usr\bin\timeout.exe")
+          } | Select-Object -First 1
+          if (-not $gitRoot) {
+            throw "Git for Windows with bin\bash.exe and usr\bin\timeout.exe was not found. Install Git for Windows or expose its installation in PATH. Searched: $($roots -join ', ')"
+          }
+          $paths = @("$gitRoot\bin", "$gitRoot\usr\bin")
+          $env:PATH = ($paths -join ';') + ';' + $env:PATH
+          & "$gitRoot\bin\bash.exe" --noprofile --norc -c 'command -v bash; timeout --version; timeout 5 bash -c "exit 0"'
+          if ($LASTEXITCODE -ne 0) { throw 'Git Bash / GNU timeout execution check failed.' }
+          # Runner prepends entries in reverse order for subsequent steps.
+          "$gitRoot\usr\bin" >> $env:GITHUB_PATH
+          "$gitRoot\bin" >> $env:GITHUB_PATH
+
       - name: Resolve task metadata
         id: meta
         shell: pwsh
@@ -36,17 +72,33 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare Codex work branch
+        id: work
         shell: pwsh
         env:
           WORK_BRANCH: ${{ steps.meta.outputs.branch }}
+          BASE_BRANCH: ${{ steps.meta.outputs.base }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          git ls-remote --exit-code --heads origin $env:WORK_BRANCH | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            git fetch origin "$($env:WORK_BRANCH):$($env:WORK_BRANCH)"
-            git checkout $env:WORK_BRANCH
-          } else {
-            git checkout -b $env:WORK_BRANCH
+          $ErrorActionPreference = 'Stop'
+          function Invoke-Git {
+            & git @args
+            if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed ($LASTEXITCODE)." }
           }
+          if ($env:ISSUE_NUMBER -notmatch '^[1-9][0-9]*$' -or
+              $env:WORK_BRANCH -cne "codex/issue-$env:ISSUE_NUMBER") {
+            throw 'Work branch must match this issue exactly.'
+          }
+          Invoke-Git check-ref-format "refs/heads/$env:BASE_BRANCH"
+          if ($env:BASE_BRANCH -eq $env:WORK_BRANCH) { throw 'Base cannot be the work branch.' }
+          $dirty = Invoke-Git status --porcelain
+          if ($dirty) { throw 'Refusing to reset a dirty checkout.' }
+          # Capture the exact remote head for a later compare-and-swap push.
+          $remote = Invoke-Git ls-remote --heads origin "refs/heads/$env:WORK_BRANCH"
+          $expected = if ($remote) { ($remote -split '\s+')[0] } else { '' }
+          "expected=$expected" >> $env:GITHUB_OUTPUT
+          Invoke-Git fetch --no-tags origin "+refs/heads/$($env:BASE_BRANCH):refs/remotes/origin/$($env:BASE_BRANCH)"
+          $baseSha = Invoke-Git rev-parse --verify "refs/remotes/origin/$($env:BASE_BRANCH)^{commit}"
+          Invoke-Git checkout -B $env:WORK_BRANCH $baseSha
 
       - name: Set up Node.js
         if: ${{ hashFiles('package-lock.json') != '' }}
@@ -112,8 +164,11 @@ jobs:
         run: |
           if (Test-Path package.json) {
             npm.cmd run test:core
+            if ($LASTEXITCODE -ne 0) { throw 'test:core failed.' }
             npm.cmd run typecheck
+            if ($LASTEXITCODE -ne 0) { throw 'typecheck failed.' }
             npm.cmd test
+            if ($LASTEXITCODE -ne 0) { throw 'npm test failed.' }
           }
 
       - name: Commit and push
@@ -122,12 +177,23 @@ jobs:
         env:
           WORK_BRANCH: ${{ steps.meta.outputs.branch }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          EXPECTED_REMOTE: ${{ steps.work.outputs.expected }}
         run: |
+          $current = git branch --show-current
+          if ($LASTEXITCODE -ne 0 -or $current -cne $env:WORK_BRANCH -or
+              $env:WORK_BRANCH -cne "codex/issue-$env:ISSUE_NUMBER") {
+            throw 'Refusing to publish an unexpected branch.'
+          }
           git config user.name "codex-self-hosted"
+          if ($LASTEXITCODE -ne 0) { throw 'Git identity setup failed.' }
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ($LASTEXITCODE -ne 0) { throw 'Git identity setup failed.' }
           git add -A
+          if ($LASTEXITCODE -ne 0) { throw 'Git staging failed.' }
           git commit -m "feat: implement issue #$($env:ISSUE_NUMBER) with Codex"
-          git push -u origin $env:WORK_BRANCH
+          if ($LASTEXITCODE -ne 0) { throw 'Git commit failed.' }
+          git push -u "--force-with-lease=refs/heads/$($env:WORK_BRANCH):$env:EXPECTED_REMOTE" origin "HEAD:refs/heads/$env:WORK_BRANCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Push failed; remote may have changed. No PR was published by this run.' }
 
       - name: Open or update pull request
         if: steps.changes.outputs.changed == 'true'
@@ -138,40 +204,61 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
         with:
+          retries: 3
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const head = `${owner}:${process.env.WORK_BRANCH}`;
-            const existing = await github.rest.pulls.list({
+            const findExisting = async () => (await github.rest.pulls.list({
               owner,
               repo,
               state: 'open',
               head,
-              base: process.env.BASE_BRANCH,
-            });
+            })).data[0];
 
-            let pr;
-            if (existing.data.length > 0) {
-              pr = existing.data[0];
-            } else {
-              const created = await github.rest.pulls.create({
+            let pr = await findExisting();
+            for (let attempt = 0; !pr && attempt < 3; attempt++) {
+              try {
+                const created = await github.rest.pulls.create({
+                  owner,
+                  repo,
+                  head: process.env.WORK_BRANCH,
+                  base: process.env.BASE_BRANCH,
+                  title: process.env.ISSUE_TITLE.replace(/^\[CODEX\]\s*/i, ''),
+                  body: `Automated Codex implementation for #${process.env.ISSUE_NUMBER}.\n\nBase: \`${process.env.BASE_BRANCH}\`\n\nFinal verification ran in the self-hosted workflow.`,
+                  draft: true,
+                });
+                pr = created.data;
+              } catch (error) {
+                // Creation may have succeeded despite a lost response, or another run won.
+                pr = await findExisting();
+                if (pr) break;
+                if (error.status === 403) {
+                  throw new Error('PR creation forbidden. Enable Settings > Actions > General > Allow GitHub Actions to create and approve pull requests; retain pull-requests: write. Pushed branch: ' + head);
+                }
+                if (attempt === 2 || (error.status && error.status !== 422 && error.status < 500)) throw error;
+                await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+              }
+            }
+            if (pr.base.ref !== process.env.BASE_BRANCH) {
+              throw new Error(`Existing PR ${pr.html_url} targets ${pr.base.ref}; expected ${process.env.BASE_BRANCH}. Refusing to retarget it.`);
+            }
+            if (!pr.draft) {
+              await github.graphql('mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }', { id: pr.node_id });
+            }
+            core.setOutput('pr_url', pr.html_url);
+            await core.summary.addLink('Codex draft PR', pr.html_url).write();
+
+            try {
+              await github.rest.issues.createComment({
                 owner,
                 repo,
-                head: process.env.WORK_BRANCH,
-                base: process.env.BASE_BRANCH,
-                title: process.env.ISSUE_TITLE.replace(/^\[CODEX\]\s*/i, ''),
-                body: `Automated Codex implementation for #${process.env.ISSUE_NUMBER}.\n\nBase: \`${process.env.BASE_BRANCH}\`\n\nFinal verification ran in the self-hosted workflow.`,
-                draft: true,
+                issue_number: Number(process.env.ISSUE_NUMBER),
+                body: `Codex implementation PR: ${pr.html_url}`,
               });
-              pr = created.data;
+            } catch (error) {
+              core.warning(`Draft PR delivered at ${pr.html_url}; issue notification failed: ${error.message}`);
             }
-
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: Number(process.env.ISSUE_NUMBER),
-              body: `Codex implementation PR: ${pr.html_url}`,
-            });
 
       - name: Report no changes
         if: steps.changes.outputs.changed == 'false'
