@@ -29,7 +29,7 @@ test('pair searches include selected dish context and direction; unrelated stapl
  assert.equal(result.pairings.length,0);
 });
 
-test('only contextual combined-direction evidence is accepted, without fetching details',async()=>{
+test('only contextual combined-direction evidence is accepted, without fetching details or double-combining the main dish',async()=>{
  let count=0;
  const service=createRecipeService({search:async q=>{
   if(++count<=3)return [];
@@ -41,7 +41,13 @@ test('only contextual combined-direction evidence is accepted, without fetching 
  },detail:()=>{throw Error('must remain on demand')}});
  const result=await service.recommend(input);
  assert.ok(result.pairings.length>0);
- assert.ok(result.pairings.every(p=>p.evidenceUrl.endsWith('/92')));
+ for(const p of result.pairings){
+  assert.ok(p.evidenceUrl.endsWith('/92'));
+  assert.equal(p.parts.length,1);
+  assert.equal(p.parts[0].id,'icook:92');
+  assert.deepEqual(p.ingredients.map(i=>i.name),p.parts[0].ingredients.map(i=>i.name));
+  assert.match(p.title,/ → (?:湯麵|白飯|涼麵|炒飯)$/);
+ }
  assert.ok(count<=5);
 });
 
