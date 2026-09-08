@@ -60,3 +60,5 @@ test('shared oil is added across dishes before strict filtering',()=>{const r=pl
 test('allergen before the word allergy is excluded rather than silently dropped',()=>{
  for(const phrase of ['對蛋過敏','蛋過敏']){const d=parseInput('雞蛋3顆、番茄300克、食用油15毫升、鹽2克。兩個人，40分鐘，有平底鍋和爐火，只用現有食材。'+phrase);assert.ok(d.exclusions.includes('egg')||d.unresolved.some(s=>s.includes('忌口')));}
 });
+
+test('single recipe planner includes sides without automatically creating meals',()=>{const rows=planMeals(base).plans;assert.ok(rows.some(r=>r.id==='tomato-soup'));assert.ok(rows.every(r=>r.recipes.length===1));});

@@ -30,3 +30,14 @@
 - 此次保留原有 8 道食譜。下一步另行處理食譜數量不足。
 - TypeScript、核心規則、production Worker 建置與 HTTP 測試通過；未執行瀏覽器互動驗證。
 - 修正版本待發布；本輪僅授權既有網站修改，線上網址仍是先前 beta。
+
+## On-demand 單菜候選 — 2026-09-08（draft PR，未部署）
+
+- 基底 `feat/friendly-pantry-ui` / `56cecc4`；獨立分支 `feat/on-demand-recipe-candidates`。
+- 預設 Default/iCook 單菜候選池、選用套餐搜尋證據、站內詳細頁、短期記憶體快取與 localStorage 收藏。沒有新付費 API 或 LLM 推薦依賴。
+- 外部摘要只能確認部分條件，標示待核對；已知缺料、忌口、設備或時間衝突仍排除。未知份量不猜測。
+- 一個代表搜尋頁與一個詳細頁正常 server fetch HTTP 200；沒有 anti-bot bypass。
+- 最後程式驗證：test:core 21/21、typecheck PASS、npm test 47/47（含 production Worker build 和站內 detail 路由）。未完成瀏覽器互動／視覺驗證或部署環境的 live 驗證。
+- 原未提交 D1 索引工作保留在原 worktree；不屬於此分支。無 merge、無 deploy。
+- 指定 Google Drive 資料夾尚待使用者回覆；Google Doc 版本紀錄尚未建立。詳細範圍與限制見 `docs/icook-on-demand.md`。
+
